@@ -1,58 +1,104 @@
-var express     = require("express"),
-    app         = express(),
-    bodyParser  = require("body-parser"),
-    mongoose    = require("mongoose"),
-    passport    = require("passport"),
-    cookieParser = require("cookie-parser"),
-    LocalStrategy = require("passport-local"),
-    flash        = require("connect-flash"),
-    Campground  = require("./models/campground"),
-    Comment     = require("./models/comment"),
-    User        = require("./models/user"),
-    session = require("express-session"),
-    seedDB      = require("./seeds"),
-    methodOverride = require("method-override");
-    
-//requiring routes
-var commentRoutes    = require("./routes/comments"),
-    campgroundRoutes = require("./routes/campgrounds"),
-    indexRoutes      = require("./routes/index")
-    
-mongoose.connect("mongodb://localhost/yelp_camp_v9");
-app.use(bodyParser.urlencoded({extended: true}));
-app.set("view engine", "ejs");
-app.use(express.static(__dirname + "/public"));
-app.use(methodOverride('_method'));
-app.use(cookieParser('secret'));
+if (process.env.NODE_ENV !== "production") {
+    require('dotenv').config();
+}
 
-//seedDB(); //seed the database
+const express = require('express');
+const path = require('path');
+const mongoose = require('mongoose');
+const flash = require('connect-flash');
+const methodOverride = require('method-override');
+const ExpressError = require('./utils/ExpressError');
+const ejsMate = require('ejs-mate');
+const session = require('express-session');
+const campgroundRoutes = require('./routes/campgrounds');
+const reviewRoutes = require('./routes/reviews');
+const userRoutes = require('./routes/users');
+const passport = require('passport');
+const localStrategy = require('passport-local');
+const User = require('./models/user');
 
-// PASSPORT CONFIGURATION
-app.use(require("express-session")({
-    secret: "Once again Rusty wins cutest dog!",
+const mongoSanitize = require('express-mongo-sanitize');
+
+const sessionConfig = {
+    secret: 'thisshouldbeabettersecret',
     resave: false,
-    saveUninitialized: false
-}));
+    saveUninitialized: true,
+    cookie: {
+        httpOnly: true,
+        expires: Date.now() + 1000 * 60 * 60 * 24 * 7,
+        maxAge: 1000 * 60 * 60 * 24 * 7
+    }
+}
 
+
+const app = express();
+
+const lisPort = 3000;
+
+app.engine('ejs', ejsMate);
+app.set('view engine', 'ejs');
+app.set('views', path.join(__dirname, 'views'));
+
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static(path.join(__dirname, 'public')));
+app.use(methodOverride('_method'));
+app.use(session(sessionConfig));
 app.use(flash());
 app.use(passport.initialize());
 app.use(passport.session());
-passport.use(new LocalStrategy(User.authenticate()));
+app.use(mongoSanitize({
+    replaceWith: '_',
+}));
+
+passport.use(new localStrategy(User.authenticate()));
+
 passport.serializeUser(User.serializeUser());
 passport.deserializeUser(User.deserializeUser());
 
-app.use(function(req, res, next){
-   res.locals.currentUser = req.user;
-   res.locals.success = req.flash('success');
-   res.locals.error = req.flash('error');
-   next();
+async function mongooseStart() {
+    try {
+        await mongoose.connect('mongodb://localhost:27017/yelp-camp');
+        console.log("connected");
+    }
+    catch (err) {
+        console.log(err)
+    };
+
+}
+
+mongooseStart();
+
+app.use((req, res, next) => {
+    // console.log(req.session);
+    res.locals.currentUser = req.user;
+    res.locals.success = req.flash('success');
+    res.locals.error = req.flash('error');
+    next();
+})
+
+app.get('/', (req, res) => {
+    res.render('home');
+    // res.send("Yelpcamp started");
 });
 
 
-app.use("/", indexRoutes);
-app.use("/campgrounds", campgroundRoutes);
-app.use("/campgrounds/:id/comments", commentRoutes);
+app.use('/', userRoutes);
+app.use('/campgrounds', campgroundRoutes);
+app.use('/campgrounds/:id/reviews', reviewRoutes);
 
-app.listen(process.env.PORT || 3000 , process.env.IP, function(){
-   console.log("The YelpCamp Server Has Started!");
+
+app.all('*', (req, res, next) => {
+    next(new ExpressError("Page Not Found!!!", 404));
 });
+app.use((err, req, res, next) => {
+    const { statusCode = 500 } = err;
+    if (!err.message) {
+        err.message = 'oh boy , something went wrong';
+    }
+    res.status(statusCode).render('error', { err });
+    // res.send("oh boy , something went wrong");
+});
+app.listen(lisPort, () => {
+    console.log(`listening on port ${lisPort}`.toUpperCase());
+});
+
